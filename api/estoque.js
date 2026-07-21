@@ -107,13 +107,13 @@ async function acaoSalvarSolicitacao(db, body) {
     setor, solicitante, responsavel: '', disponivel: false,
   }));
 
-  const { error } = await db.from('pendentes').insert(linhas);
+  const { data: inseridos, error } = await db.from('pendentes').insert(linhas).select('id');
   if (error) throw error;
 
   await incrementarSequencial();
   await enviarEmailSolicitacao(db, pedidoId, data, setor, solicitante, itens);
 
-  return { status: 200, json: { ok: true, total: itens.length } };
+  return { status: 200, json: { ok: true, total: itens.length, ids: (inseridos || []).map((r) => r.id) } };
 }
 
 async function acaoSalvarEntrada(db, body) {
@@ -290,8 +290,13 @@ async function acaoProcessarValidacaoBase(db, body) {
   const { error: regErr } = await db.from('registros').insert(linhasRegistro);
   if (regErr) throw regErr;
 
-  const { error: delErr } = await db.from('pendentes').delete().neq('id', 0);
-  if (delErr) throw delErr;
+  // Remove da tabela "pendentes" apenas os itens que foram de fato processados
+  // agora (identificados pelo id), preservando os demais itens ainda pendentes.
+  const idsProcessados = itensPendentes.map((it) => it.id).filter((id) => id !== undefined && id !== null);
+  if (idsProcessados.length) {
+    const { error: delErr } = await db.from('pendentes').delete().in('id', idsProcessados);
+    if (delErr) throw delErr;
+  }
 
   for (const [pedidoId, dados] of Object.entries(agrupado)) {
     await enviarEmailValidacao(db, pedidoId, dados.solicitante, dados.itens);

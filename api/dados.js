@@ -54,6 +54,7 @@ module.exports = async (req, res) => {
     }));
 
     const mockBasePedidosPendentes = (pendentesR.data || []).map((r) => ({
+      id: r.id,
       pedido: r.pedido_id || '',
       data: r.data || '',
       item: r.item || '',
