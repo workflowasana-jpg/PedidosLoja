@@ -299,7 +299,10 @@
                                     <button onclick="marcarDisponibilidadeMassa(true)" class="btn-ghost">✓ Disponível em Massa</button>
                                     <button onclick="marcarDisponibilidadeMassa(false)" class="btn-ghost" style="color:#DC3545;background:#FEE2E2;">✗ Indisponível em Massa</button>
                                 </div>
-                                <button id="btn-validar-base" onclick="processarValidacaoBaseGS()" class="btn-primary">✔ Validar e Enviar Pedido</button>
+                                <button id="btn-validar-base" onclick="processarValidacaoBaseGS()" class="btn-primary">✔ Validar Selecionados</button>
+                            </div>
+                            <div style="font-size:11px;color:var(--text-muted);margin-top:6px;text-align:right;">
+                                Marque a caixa ✓ de cada item que deseja processar agora. Itens não marcados continuam pendentes.
                             </div>
                         </div>
                     </div>
@@ -1046,7 +1049,7 @@ function gerarRelatorioCusto(){
         if(normTipo(r.tipo) !== 'Entrada') return;
         const it = String(r.item||'').trim();
         if(!it) return;
-        const qtd   = parseInt(r.qtdDispo||r.qtdSoli||0);
+        const qtd   = parseInt((r.qtdDispo !== undefined && r.qtdDispo !== null && r.qtdDispo !== '') ? r.qtdDispo : (r.qtdSoli||0));
         const preco = parseFloat(r.preco||0);
         if(qtd <= 0 || preco <= 0) return;
         if(!cmpMap[it]) cmpMap[it] = {qtd:0, custoTotal:0};
@@ -1076,7 +1079,7 @@ function gerarRelatorioCusto(){
         const setor = String(r.setor||'—').trim();
         const item  = String(r.item||'—').trim();
         const cat   = String(r.cat||'—').trim();
-        const qtd   = parseInt(r.qtdDispo||r.qtdSoli||0);
+        const qtd   = parseInt((r.qtdDispo !== undefined && r.qtdDispo !== null && r.qtdDispo !== '') ? r.qtdDispo : (r.qtdSoli||0));
         const cm    = cmpUnit[item] || parseFloat(r.preco||0);
 
         if(!agrupado[setor]) agrupado[setor] = {};
@@ -1217,11 +1220,11 @@ function exportarCustoSetor(fmt){
 }
 
 function logout(){
-    usuarioLogado=null;
-    document.getElementById('app-container').classList.remove('visible');
-    document.getElementById('screen-login').style.display='flex';
-    ['login-username','login-password'].forEach(id=>document.getElementById(id).value='');
-    document.getElementById('login-error').style.display='none';
+    // Recarrega a página inteira em vez de só esconder a tela.
+    // Isso garante que TODO o estado em memória (tela atual, filtros
+    // aplicados, dados carregados, etc.) seja zerado — evitando que o
+    // próximo login "herde" a tela/filtros de uma sessão anterior.
+    window.location.href = window.location.pathname;
 }
 
 // ══════════════════════════════════════════════════
@@ -1452,7 +1455,7 @@ function enviarSolicitacao100(){
             _liberarBotao('btn-enviar-solicitacao');
             if(res.ok){
                 // Adiciona localmente ao array de pendentes para não recarregar a página
-                itens.forEach(it=>mockBasePedidosPendentes.push({pedido:pedidoId,data,item:it.item,cat:it.cat,qtd:it.qtd,setor,solicitante:sol,disponivel:true}));
+                itens.forEach((it,idx)=>mockBasePedidosPendentes.push({id:(res.ids&&res.ids[idx]),pedido:pedidoId,data,item:it.item,cat:it.cat,qtd:it.qtd,setor,solicitante:sol,disponivel:true}));
                 sequencialPedido++;
                 document.getElementById('sol-pedido-id').value='#'+sequencialPedido;
                 document.getElementById('sol-solicitante').value='';
@@ -2029,21 +2032,28 @@ function exportarRelItens(fmt){
 function toggleCheckboxesBase(m){ document.querySelectorAll('.base-chk').forEach(c=>c.checked=m.checked); }
 function marcarDisponibilidadeMassa(st){ document.querySelectorAll('.base-chk:checked').forEach(c=>{mockBasePedidosPendentes[c.dataset.idx].disponivel=st;}); renderizarBaseAnalise(); }
 function processarValidacaoBaseGS(){
-    if(mockBasePedidosPendentes.length===0){toast('Sem itens pendentes.',true);return;}
-    // Verificar se todos os itens foram validados (disponivel !== undefined)
-    const naoValidados=mockBasePedidosPendentes.filter(it=>it.disponivel===undefined||it.disponivel===null||it.disponivel==='');
+    // Pega só as linhas cuja caixinha de seleção está marcada
+    const checks=[...document.querySelectorAll('.base-chk:checked')];
+    if(checks.length===0){toast('Marque ao menos um item para validar.',true);return;}
+
+    const indices=checks.map(c=>parseInt(c.dataset.idx));
+    const selecionados=indices.map(i=>mockBasePedidosPendentes[i]).filter(Boolean);
+
+    // Confirma que todos os selecionados já foram marcados como disponível/indisponível
+    const naoValidados=selecionados.filter(it=>it.disponivel===undefined||it.disponivel===null||it.disponivel==='');
     if(naoValidados.length>0){
-        toast(`⚠️ ${naoValidados.length} item(ns) ainda não foram validados. Valide todos antes de enviar.`,true);
+        toast(`⚠️ ${naoValidados.length} item(ns) selecionado(s) ainda não foram marcados como disponível/indisponível.`,true);
         return;
     }
+
     showLoading(true);
     _bloquearBotao('btn-validar-base','⏳ Processando...');
-    chamarApi('/api/estoque', { action: 'processar-validacao-base', itensPendentes: mockBasePedidosPendentes })
+    chamarApi('/api/estoque', { action: 'processar-validacao-base', itensPendentes: selecionados })
         .then(function(res){
             showLoading(false);
             _liberarBotao('btn-validar-base');
             if(res.ok){
-                mockBasePedidosPendentes.forEach(it=>{
+                selecionados.forEach(it=>{
                     const d=new Date(it.data);
                     const disponivel=!!it.disponivel;
                     databaseRegistros.push({
@@ -2056,8 +2066,11 @@ function processarValidacaoBaseGS(){
                         mes:String(d.getMonth()+1).padStart(2,'0'), ano:String(d.getFullYear())
                     });
                 });
-                mockBasePedidosPendentes=[];
-                toast(`✅ ${res.processados} saída(s) registradas! E-mail enviado ao solicitante.`);
+                // Remove da lista local só os itens que acabaram de ser processados
+                const idsProcessados=new Set(selecionados.map(it=>it.id));
+                mockBasePedidosPendentes=mockBasePedidosPendentes.filter(it=>!idsProcessados.has(it.id));
+                toast(`✅ ${res.processados} item(ns) validado(s)! E-mail enviado ao(s) solicitante(s).`);
+                renderizarBaseAnalise();
                 recarregarDados();
             }
         })
@@ -2087,7 +2100,7 @@ function renderizarBaseEntrada(){
         <td style="padding:8px 12px;font-size:12px;">${r.data||'—'}</td>
         <td style="padding:8px 12px;font-size:12px;font-weight:500;">${r.item||'—'}</td>
         <td style="padding:8px 12px;font-size:12px;">${r.cat||'—'}</td>
-        <td style="padding:8px 12px;font-size:12px;font-weight:700;text-align:center;">${r.qtdDispo||r.qtdSoli||0}</td>
+        <td style="padding:8px 12px;font-size:12px;font-weight:700;text-align:center;">${(r.qtdDispo!==undefined&&r.qtdDispo!==null&&r.qtdDispo!=='')?r.qtdDispo:(r.qtdSoli||0)}</td>
         <td style="padding:8px 12px;font-size:12px;">${r.setor||'—'}</td>
         <td style="padding:8px 12px;font-size:12px;">${r.responsavel||'—'}</td>
         <td style="padding:8px 12px;"><span class="badge-entrada">Entrada</span></td>
